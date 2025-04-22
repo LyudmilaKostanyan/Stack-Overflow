@@ -1,10 +1,9 @@
-// Cross-platform stack usage probe without crashing
-// Works on Linux, macOS, and Windows
-
 #include <iostream>
 #include <cstdint>
 #include <thread>
 #include <iomanip>
+#include <csignal>
+#include <csetjmp>
 
 #if defined(_WIN32)
 #include <windows.h>
@@ -14,9 +13,18 @@
 #include <sys/resource.h>
 #endif
 
-constexpr size_t STEP_SIZE = 2048;
+constexpr size_t STEP_SIZE = 4096;
 constexpr size_t STACK_MARGIN = 64 * 1024;
 volatile size_t g_stack_used = 0;
+
+#if defined(__unix__) || defined(__APPLE__)
+stack_t altstack;
+sigjmp_buf env;
+
+void sigsegv_handler(int) {
+    siglongjmp(env, 1);
+}
+#endif
 
 size_t print_stack_limit() {
     size_t size = 0;
@@ -48,27 +56,42 @@ size_t print_stack_limit() {
     return size;
 }
 
-void probe_stack_usage(size_t limit) {
+void probe_stack_usage_recursive() {
     char buffer[STEP_SIZE];
     buffer[0] = 1;
     g_stack_used += STEP_SIZE;
-
-    if (g_stack_used + STEP_SIZE < limit)
-        probe_stack_usage(limit);
+    probe_stack_usage_recursive();
 }
 
 #if defined(_WIN32)
-DWORD WINAPI thread_func(LPVOID lpParam) {
-    size_t limit = *reinterpret_cast<size_t*>(lpParam);
-    g_stack_used = 0;
-    probe_stack_usage(limit - STACK_MARGIN);
+DWORD WINAPI thread_func(LPVOID) {
+    __try {
+        g_stack_used = 0;
+        probe_stack_usage_recursive();
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    }
     return 0;
 }
 #else
-void* thread_func(void* arg) {
-    size_t limit = *reinterpret_cast<size_t*>(arg);
+void* thread_func(void*) {
+    altstack.ss_sp = malloc(SIGSTKSZ);
+    altstack.ss_size = SIGSTKSZ;
+    altstack.ss_flags = 0;
+    sigaltstack(&altstack, nullptr);
+
+    struct sigaction sa;
+    sa.sa_handler = sigsegv_handler;
+    sigemptyset(&sa.sa_mask);
+    sa.sa_flags = SA_ONSTACK;
+    sigaction(SIGSEGV, &sa, nullptr);
+
     g_stack_used = 0;
-    probe_stack_usage(limit - STACK_MARGIN);
+
+    if (sigsetjmp(env, 1) == 0) {
+        probe_stack_usage_recursive();
+    }
+
+    free(altstack.ss_sp);
     return nullptr;
 }
 #endif
@@ -76,20 +99,22 @@ void* thread_func(void* arg) {
 size_t start_probing_stack(size_t stack_limit) {
 #if defined(_WIN32)
     DWORD thread_id;
-    HANDLE hThread = CreateThread(nullptr, stack_limit, thread_func, &stack_limit, 0, &thread_id);
+    HANDLE hThread = CreateThread(nullptr, stack_limit, thread_func, nullptr, 0, &thread_id);
     WaitForSingleObject(hThread, INFINITE);
     CloseHandle(hThread);
 #else
-    const size_t min_stack = 64 * 1024;
+    const size_t min_stack = 64 * 1024; // 64 KB
     if (stack_limit < min_stack)
         stack_limit = min_stack;
 
     pthread_attr_t attr;
     pthread_attr_init(&attr);
     pthread_attr_setstacksize(&attr, stack_limit);
+
     pthread_t thread;
-    pthread_create(&thread, &attr, thread_func, &stack_limit);
+    pthread_create(&thread, &attr, thread_func, nullptr);
     pthread_join(thread, nullptr);
+
     pthread_attr_destroy(&attr);
 #endif
     return g_stack_used;
@@ -98,9 +123,7 @@ size_t start_probing_stack(size_t stack_limit) {
 int main() {
     size_t limit = print_stack_limit();
     size_t used = start_probing_stack(limit);
-    std::cout << "Usable stack space without crash: "
+    std::cout << "Usable stack space before crash: "
               << used / 1024 << " KB (" << used / (1024.0 * 1024.0) << " MB)\n";
-    int arr[(used / sizeof(int))];
-    arr[0] = 1;
     return 0;
 }
