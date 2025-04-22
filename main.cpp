@@ -55,13 +55,14 @@ size_t print_stack_limit() {
     return size;
 }
 
-void probe_stack_usage_recursive() {
+void probe_stack_usage_recursive(size_t depth = 0) {
     char buffer[STEP_SIZE];
     buffer[0] = 1;
     g_stack_used += STEP_SIZE;
-    STEP_SIZE *= 1.5;
-    probe_stack_usage_recursive();
+    std::cout << "Depth: " << depth << ", Stack used: " << g_stack_used / 1024 << " KB\n";
+    probe_stack_usage_recursive(depth + 1);
 }
+
 
 #if defined(_WIN32)
 DWORD WINAPI thread_func(LPVOID) {
