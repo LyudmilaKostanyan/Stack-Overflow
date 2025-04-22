@@ -13,8 +13,8 @@
 #include <sys/resource.h>
 #endif
 
-size_t STEP_SIZE = 1024 * 4;
-volatile size_t g_stack_used = 0;
+#define STEP_SIZE 4096  // Use preprocessor macro for MSVC compatibility
+size_t g_stack_used = 0; // No longer volatile
 
 #if defined(__unix__) || defined(__APPLE__)
 stack_t altstack;
@@ -56,10 +56,14 @@ size_t print_stack_limit() {
 }
 
 void probe_stack_usage_recursive(size_t depth = 0) {
-    char buffer[STEP_SIZE];
+    enum { kBufferSize = STEP_SIZE };
+    char buffer[kBufferSize];
     buffer[0] = static_cast<char>(depth);
-    g_stack_used += STEP_SIZE;
+    g_stack_used = g_stack_used + STEP_SIZE;
+    if (depth % 1000 == 0)
+        std::cout << "Depth: " << depth << ", Stack used: " << g_stack_used / 1024 << " KB\n";
     probe_stack_usage_recursive(depth + 1);
+
     volatile int x = 42;
     (void)x;
 }
