@@ -1,17 +1,25 @@
+// Cross-platform stack usage probe without crashing
+// Works on Linux, macOS, and Windows
+
 #include <iostream>
 #include <cstdint>
+#include <thread>
 #include <iomanip>
 
 #if defined(_WIN32)
-    #define NOMINMAX
-    #include <windows.h>
-#elif defined(__unix__) || defined(__APPLE__)
-    #include <sys/resource.h>
-    #include <limits>
+#include <windows.h>
+#else
+#include <pthread.h>
+#include <unistd.h>
+#include <sys/resource.h>
 #endif
 
+constexpr size_t STEP_SIZE = 2048;
+constexpr size_t STACK_MARGIN = 64 * 1024;
+volatile size_t g_stack_used = 0;
+
 size_t print_stack_limit() {
-    size_t size;
+    size_t size = 0;
 #if defined(_WIN32)
     MEMORY_BASIC_INFORMATION mbi;
     VirtualQuery(&mbi, &mbi, sizeof(mbi));
@@ -27,19 +35,10 @@ size_t print_stack_limit() {
     struct rlimit rl;
     if (getrlimit(RLIMIT_STACK, &rl) == 0) {
         std::cout << std::fixed << std::setprecision(2);
-
         std::cout << "Stack size limit (soft): "
                   << rl.rlim_cur / 1024 << " KB ("
                   << static_cast<double>(rl.rlim_cur) / (1024 * 1024) << " MB)\n";
         size = rl.rlim_cur;
-
-        if (rl.rlim_max == RLIM_INFINITY) {
-            std::cout << "Stack size limit (hard): unlimited\n";
-        } else {
-            std::cout << "Stack size limit (hard): "
-                      << static_cast<double>(rl.rlim_max) / (1024 * 1024) << " MB ("
-                      << static_cast<double>(rl.rlim_max) / (1024 * 1024 * 1024) << " GB)\n";
-        }
     } else {
         std::cerr << "Failed to get stack size limit.\n";
     }
@@ -49,14 +48,59 @@ size_t print_stack_limit() {
     return size;
 }
 
+void probe_stack_usage(size_t limit) {
+    char buffer[STEP_SIZE];
+    buffer[0] = 1;
+    g_stack_used += STEP_SIZE;
+
+    if (g_stack_used + STEP_SIZE < limit)
+        probe_stack_usage(limit);
+}
+
+#if defined(_WIN32)
+DWORD WINAPI thread_func(LPVOID lpParam) {
+    size_t limit = *reinterpret_cast<size_t*>(lpParam);
+    g_stack_used = 0;
+    probe_stack_usage(limit - STACK_MARGIN);
+    return 0;
+}
+#else
+void* thread_func(void* arg) {
+    size_t limit = *reinterpret_cast<size_t*>(arg);
+    g_stack_used = 0;
+    probe_stack_usage(limit - STACK_MARGIN);
+    return nullptr;
+}
+#endif
+
+size_t start_probing_stack(size_t stack_limit) {
+#if defined(_WIN32)
+    DWORD thread_id;
+    HANDLE hThread = CreateThread(nullptr, stack_limit, thread_func, &stack_limit, 0, &thread_id);
+    WaitForSingleObject(hThread, INFINITE);
+    CloseHandle(hThread);
+#else
+    const size_t min_stack = 64 * 1024;
+    if (stack_limit < min_stack)
+        stack_limit = min_stack;
+
+    pthread_attr_t attr;
+    pthread_attr_init(&attr);
+    pthread_attr_setstacksize(&attr, stack_limit);
+    pthread_t thread;
+    pthread_create(&thread, &attr, thread_func, &stack_limit);
+    pthread_join(thread, nullptr);
+    pthread_attr_destroy(&attr);
+#endif
+    return g_stack_used;
+}
+
 int main() {
     size_t limit = print_stack_limit();
-    size_t safe_size = limit - (64 * 1024);
-
-    std::cout << "Trying to allocate " << safe_size / 1024 << " KB on stack...\n";
-
-    int array[safe_size / sizeof(int)];
-    std::cout << "Success.\n";
-
+    size_t used = start_probing_stack(limit);
+    std::cout << "Usable stack space without crash: "
+              << used / 1024 << " KB (" << used / (1024.0 * 1024.0) << " MB)\n";
+    int arr[(used / sizeof(int))];
+    arr[0] = 1;
     return 0;
 }
