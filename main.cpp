@@ -59,14 +59,7 @@ void probe_stack_usage_recursive(size_t depth = 0) {
     char buffer[STEP_SIZE];
     buffer[0] = static_cast<char>(depth);
     g_stack_used += STEP_SIZE;
-
-    if (depth % 1000 == 0)
-        std::cout << "Depth: " << depth << ", Stack used: " << g_stack_used / 1024 << " KB\n";
-
     probe_stack_usage_recursive(depth + 1);
-
-    volatile int x = 42;
-    (void)x;
 }
 
 #if defined(_WIN32)
