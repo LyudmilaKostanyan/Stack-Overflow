@@ -1,139 +1,83 @@
 #include <iostream>
 #include <cstdint>
-#include <thread>
 #include <iomanip>
-#include <csignal>
-#include <csetjmp>
 
 #if defined(_WIN32)
-#include <windows.h>
-#else
-#include <pthread.h>
-#include <unistd.h>
-#include <sys/resource.h>
+    #define NOMINMAX
+    #include <windows.h>
+#elif defined(__unix__) || defined(__APPLE__)
+    #include <sys/resource.h>
+    #include <limits>
 #endif
 
-#define STEP_SIZE 4096  // Use preprocessor macro for MSVC compatibility
-size_t g_stack_used = 0; // No longer volatile
-
-#if defined(__unix__) || defined(__APPLE__)
-stack_t altstack;
-sigjmp_buf env;
-
-void sigsegv_handler(int) {
-    siglongjmp(env, 1);
-}
-#endif
-
-size_t print_stack_limit() {
-    size_t size = 0;
+std::size_t get_usable_stack_bytes() {
 #if defined(_WIN32)
     MEMORY_BASIC_INFORMATION mbi;
     VirtualQuery(&mbi, &mbi, sizeof(mbi));
     uintptr_t current = reinterpret_cast<uintptr_t>(mbi.BaseAddress);
     uintptr_t base = reinterpret_cast<uintptr_t>(mbi.AllocationBase);
-    size_t usableStack = current - base;
-
-    std::cout << "Estimated usable stack size (Windows): "
-              << usableStack / 1024 << " KB\n";
-    size = usableStack;
-
+    return current - base;
 #elif defined(__unix__) || defined(__APPLE__)
     struct rlimit rl;
     if (getrlimit(RLIMIT_STACK, &rl) == 0) {
-        std::cout << std::fixed << std::setprecision(2);
-        std::cout << "Stack size limit (soft): "
-                  << rl.rlim_cur / 1024 << " KB ("
-                  << static_cast<double>(rl.rlim_cur) / (1024 * 1024) << " MB)\n";
-        size = rl.rlim_cur;
-    } else {
-        std::cerr << "Failed to get stack size limit.\n";
-    }
-#else
-    std::cout << "Unsupported platform.\n";
-#endif
-    return size;
-}
-
-void probe_stack_usage_recursive(size_t depth = 0) {
-    enum { kBufferSize = STEP_SIZE };
-    char buffer[kBufferSize];
-    buffer[0] = static_cast<char>(depth);
-    g_stack_used = g_stack_used + STEP_SIZE;
-
-    std::cout << "Depth: " << depth
-              << ", Stack used: " << g_stack_used / 1024 << " KB"
-              << std::endl;
-
-    probe_stack_usage_recursive(depth + 1);
-
-    volatile int x = 42;
-    (void)x;
-}
-
-#if defined(_WIN32)
-DWORD WINAPI thread_func(LPVOID) {
-    __try {
-        g_stack_used = 0;
-        probe_stack_usage_recursive();
-    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        if (rl.rlim_cur == RLIM_INFINITY) return 64 * 1024 * 1024; // 64MB fallback
+        return rl.rlim_cur;
     }
     return 0;
-}
 #else
-void* thread_func(void*) {
-    altstack.ss_sp = malloc(SIGSTKSZ * 4);
-    altstack.ss_size = SIGSTKSZ * 4;
-    altstack.ss_flags = 0;
-    sigaltstack(&altstack, nullptr);
+    return 0;
+#endif
+}
 
-    struct sigaction sa;
-    sa.sa_handler = sigsegv_handler;
-    sigemptyset(&sa.sa_mask);
-    sa.sa_flags = SA_ONSTACK;
-    sigaction(SIGSEGV, &sa, nullptr);
-
-    g_stack_used = 0;
-
-    if (sigsetjmp(env, 1) == 0) {
-        probe_stack_usage_recursive();
-    } else {
-        std::cout << "Stack overflow caught via signal handler.\n";
+void try_stack_allocation(std::size_t total_stack) {
+    const std::size_t safety_margin = 32 * 1024; // 32 KB safety buffer
+    if (total_stack <= safety_margin) {
+        std::cerr << "Not enough stack space to safely allocate.\n";
+        return;
     }
 
-    free(altstack.ss_sp);
-    return nullptr;
-}
-#endif
+    std::size_t alloc_bytes = total_stack - safety_margin;
+    std::size_t num_ints = alloc_bytes / sizeof(int);
 
-size_t start_probing_stack(size_t stack_limit) {
+    std::cout << "Attempting to allocate array of "
+              << num_ints << " ints (~"
+              << (num_ints * sizeof(int)) / 1024 << " KB) on the stack.\n";
+
 #if defined(_WIN32)
-    DWORD thread_id;
-    HANDLE hThread = CreateThread(nullptr, stack_limit, thread_func, nullptr, 0, &thread_id);
-    WaitForSingleObject(hThread, INFINITE);
-    CloseHandle(hThread);
+    std::cout << "Skipping stack allocation on Windows for safety.\n";
 #else
-    const size_t min_stack = 64 * 1024;
-    if (stack_limit < min_stack)
-        stack_limit = min_stack;
-
-    pthread_attr_t attr;
-    pthread_attr_init(&attr);
-    pthread_attr_setstacksize(&attr, stack_limit);
-
-    pthread_t thread;
-    pthread_create(&thread, &attr, thread_func, nullptr);
-    pthread_join(thread, nullptr);
-
-    pthread_attr_destroy(&attr);
+    try {
+        volatile int stack_array[num_ints];
+        stack_array[0] = 123;
+        stack_array[num_ints - 1] = 321;
+        std::cout << "Stack allocation successful.\n";
+    } catch (...) {
+        std::cerr << "Stack allocation failed or crashed.\n";
+    }
 #endif
-    return g_stack_used;
 }
 
 int main() {
-    size_t limit = print_stack_limit();
-    size_t used = start_probing_stack(limit);
-    std::cout << "Usable stack space before crash: "
-              << used / 1024 << " KB (" << used / (1024.0 * 1024.0) << " MB)\n";
+    std::size_t stack_bytes = get_usable_stack_bytes();
+    std::cout << std::fixed << std::setprecision(2);
+
+#if defined(_WIN32)
+    std::cout << "Estimated usable stack size (Windows): "
+              << stack_bytes / 1024 << " KB\n";
+#elif defined(__unix__) || defined(__APPLE__)
+    struct rlimit rl;
+    getrlimit(RLIMIT_STACK, &rl);
+    std::cout << "Stack size limit (soft): " << rl.rlim_cur / 1024 << " KB ("
+              << static_cast<double>(rl.rlim_cur) / (1024 * 1024) << " MB)\n";
+    if (rl.rlim_max == RLIM_INFINITY) {
+        std::cout << "Stack size limit (hard): unlimited\n";
+    } else {
+        std::cout << "Stack size limit (hard): "
+                  << static_cast<double>(rl.rlim_max) / (1024 * 1024) << " MB ("
+                  << static_cast<double>(rl.rlim_max) / (1024 * 1024 * 1024) << " GB)\n";
+    }
+#endif
+
+    try_stack_allocation(stack_bytes);
     return 0;
 }
