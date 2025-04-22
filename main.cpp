@@ -59,7 +59,7 @@ void probe_stack_usage_recursive() {
     char buffer[STEP_SIZE];
     buffer[0] = 1;
     g_stack_used += STEP_SIZE;
-    STEP_SIZE *= 2;
+    STEP_SIZE *= 1.5;
     probe_stack_usage_recursive();
 }
 
