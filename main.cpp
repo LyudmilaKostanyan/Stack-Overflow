@@ -13,7 +13,7 @@
 #include <sys/resource.h>
 #endif
 
-constexpr size_t STEP_SIZE = 1024 * 40;
+size_t STEP_SIZE = 1024 * 4;
 volatile size_t g_stack_used = 0;
 
 #if defined(__unix__) || defined(__APPLE__)
@@ -59,6 +59,7 @@ void probe_stack_usage_recursive() {
     char buffer[STEP_SIZE];
     buffer[0] = 1;
     g_stack_used += STEP_SIZE;
+    STEP_SIZE *= 2;
     probe_stack_usage_recursive();
 }
 
