@@ -63,7 +63,6 @@ void probe_stack_usage_recursive(size_t depth = 0) {
 
     std::cout << "Depth: " << depth
               << ", Stack used: " << g_stack_used / 1024 << " KB"
-              << ", buffer addr: " << static_cast<void*>(&buffer)
               << std::endl;
 
     probe_stack_usage_recursive(depth + 1);
