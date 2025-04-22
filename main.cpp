@@ -83,8 +83,8 @@ DWORD WINAPI thread_func(LPVOID) {
 }
 #else
 void* thread_func(void*) {
-    altstack.ss_sp = malloc(SIGSTKSZ);
-    altstack.ss_size = SIGSTKSZ;
+    altstack.ss_sp = malloc(SIGSTKSZ * 4);
+    altstack.ss_size = SIGSTKSZ * 4;
     altstack.ss_flags = 0;
     sigaltstack(&altstack, nullptr);
 
@@ -98,6 +98,8 @@ void* thread_func(void*) {
 
     if (sigsetjmp(env, 1) == 0) {
         probe_stack_usage_recursive();
+    } else {
+        std::cout << "Stack overflow caught via signal handler.\n";
     }
 
     free(altstack.ss_sp);
