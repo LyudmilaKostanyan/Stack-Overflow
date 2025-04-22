@@ -39,9 +39,11 @@ void try_stack_allocation(std::size_t total_stack) {
     std::size_t alloc_bytes = total_stack - safety_margin;
     std::size_t num_ints = alloc_bytes / sizeof(int);
 
-    std::cout << "Attempting to allocate array of "
-              << num_ints << " ints (~"
-              << (num_ints * sizeof(int)) / 1024 << " KB) on the stack.\n";
+    std::cout << "Preparing to allocate a stack array:\n"
+          << "  - Elements   : " << num_ints << " integers\n"
+          << "  - Total size : " << (num_ints * sizeof(int)) / 1024 << " KB ("
+          << static_cast<double>(num_ints * sizeof(int)) / (1024 * 1024) << " MB)\n";
+
 
 #if defined(_WIN32)
     std::cout << "Skipping stack allocation on Windows for safety.\n";
@@ -61,23 +63,40 @@ int main() {
     std::size_t stack_bytes = get_usable_stack_bytes();
     std::cout << std::fixed << std::setprecision(2);
 
+    std::cout << "=== Stack Size Information ===\n";
+
 #if defined(_WIN32)
-    std::cout << "Estimated usable stack size (Windows): "
-              << stack_bytes / 1024 << " KB\n";
+    std::cout << "Platform          : Windows\n";
+    std::cout << "Usable Stack Size : " << stack_bytes / 1024 << " KB\n";
+
 #elif defined(__unix__) || defined(__APPLE__)
     struct rlimit rl;
     getrlimit(RLIMIT_STACK, &rl);
-    std::cout << "Stack size limit (soft): " << rl.rlim_cur / 1024 << " KB ("
+
+    std::cout << "Platform          : "
+#if defined(__APPLE__)
+              << "macOS\n";
+#else
+              << "Linux/Unix\n";
+#endif
+
+    std::cout << "Soft Stack Limit  : " << rl.rlim_cur / 1024 << " KB ("
               << static_cast<double>(rl.rlim_cur) / (1024 * 1024) << " MB)\n";
+
     if (rl.rlim_max == RLIM_INFINITY) {
-        std::cout << "Stack size limit (hard): unlimited\n";
+        std::cout << "Hard Stack Limit  : unlimited\n";
     } else {
-        std::cout << "Stack size limit (hard): "
+        std::cout << "Hard Stack Limit  : "
                   << static_cast<double>(rl.rlim_max) / (1024 * 1024) << " MB ("
                   << static_cast<double>(rl.rlim_max) / (1024 * 1024 * 1024) << " GB)\n";
     }
+
+    std::cout << "Usable Stack Size : " << stack_bytes / 1024 << " KB ("
+              << static_cast<double>(stack_bytes) / (1024 * 1024) << " MB)\n";
 #endif
 
+    std::cout << "\n=== Stack Allocation Test ===\n";
     try_stack_allocation(stack_bytes);
+
     return 0;
 }
