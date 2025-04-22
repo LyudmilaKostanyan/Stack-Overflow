@@ -13,8 +13,7 @@
 #include <sys/resource.h>
 #endif
 
-constexpr size_t STEP_SIZE = 4096;
-constexpr size_t STACK_MARGIN = 64 * 1024;
+constexpr size_t STEP_SIZE = 1024 * 40;
 volatile size_t g_stack_used = 0;
 
 #if defined(__unix__) || defined(__APPLE__)
@@ -103,7 +102,7 @@ size_t start_probing_stack(size_t stack_limit) {
     WaitForSingleObject(hThread, INFINITE);
     CloseHandle(hThread);
 #else
-    const size_t min_stack = 64 * 1024; // 64 KB
+    const size_t min_stack = 64 * 1024;
     if (stack_limit < min_stack)
         stack_limit = min_stack;
 
